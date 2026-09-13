@@ -1,30 +1,17 @@
 'use client';
 
 import { useState, useEffect } from 'react';
-import { supabase } from '../lib/supabaseClient';
-import { Plus, Pencil, Trash2, Check, X, PackageSearch } from 'lucide-react';
+import { supabase } from '../../lib/supabaseClient';
 
-export default function HomePage() {
+export default function SellPage() {
   const [products, setProducts] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
+  const [success, setSuccess] = useState('');
+  const [submitting, setSubmitting] = useState(false);
 
-  const [form, setForm] = useState({
-    sku: '',
-    name: '',
-    price: '',
-    stock: '',
-    unit: '',
-  });
-
-  const [editingId, setEditingId] = useState(null);
-  const [editForm, setEditForm] = useState({
-    sku: '',
-    name: '',
-    price: '',
-    stock: '',
-    unit: '',
-  });
+  const [selectedProductId, setSelectedProductId] = useState('');
+  const [quantity, setQuantity] = useState('');
 
   useEffect(() => {
     fetchProducts();
@@ -36,7 +23,7 @@ export default function HomePage() {
     const { data, error } = await supabase
       .from('products')
       .select('*')
-      .order('created_at', { ascending: false });
+      .order('name', { ascending: true });
 
     if (error) {
       setError(error.message);
@@ -46,279 +33,137 @@ export default function HomePage() {
     setLoading(false);
   }
 
-  function handleFormChange(e) {
-    const { name, value } = e.target;
-    setForm((prev) => ({ ...prev, [name]: value }));
+  const selectedProduct = products.find((p) => p.id === selectedProductId);
+  const parsedQuantity = parseInt(quantity, 10);
+  const totalPrice =
+    selectedProduct && !isNaN(parsedQuantity) && parsedQuantity > 0
+      ? selectedProduct.price * parsedQuantity
+      : 0;
+
+  function resetForm() {
+    setSelectedProductId('');
+    setQuantity('');
   }
 
-  async function handleAddProduct(e) {
+  async function handleSell(e) {
     e.preventDefault();
-    if (!form.sku || !form.name || !form.price || !form.stock || !form.unit) {
-      setError('กรุณากรอกข้อมูลให้ครบทุกช่อง');
+    setError('');
+    setSuccess('');
+
+    if (!selectedProductId) {
+      setError('กรุณาเลือกสินค้า');
       return;
     }
 
-    setError('');
-    const { error } = await supabase.from('products').insert([
+    if (isNaN(parsedQuantity) || parsedQuantity <= 0) {
+      setError('กรุณากรอกจำนวนให้ถูกต้อง');
+      return;
+    }
+
+    const product = products.find((p) => p.id === selectedProductId);
+    if (!product) {
+      setError('ไม่พบสินค้าที่เลือก');
+      return;
+    }
+
+    if (parsedQuantity > product.stock) {
+      setError(`สินค้าคงเหลือไม่พอ (คงเหลือ ${product.stock} ${product.unit})`);
+      return;
+    }
+
+    setSubmitting(true);
+
+    const total = product.price * parsedQuantity;
+
+    const { error: saleError } = await supabase.from('sales').insert([
       {
-        sku: form.sku,
-        name: form.name,
-        price: parseFloat(form.price),
-        stock: parseInt(form.stock, 10),
-        unit: form.unit,
+        product_id: product.id,
+        product_name: product.name,
+        quantity: parsedQuantity,
+        total_price: total,
+        sold_at: new Date().toISOString(),
       },
     ]);
 
-    if (error) {
-      setError(error.message);
+    if (saleError) {
+      setError(saleError.message);
+      setSubmitting(false);
       return;
     }
 
-    setForm({ sku: '', name: '', price: '', stock: '', unit: '' });
-    fetchProducts();
-  }
-
-  async function handleDeleteProduct(id) {
-    if (!confirm('ยืนยันการลบสินค้านี้?')) return;
-
-    setError('');
-    const { error } = await supabase.from('products').delete().eq('id', id);
-
-    if (error) {
-      setError(error.message);
-      return;
-    }
-
-    fetchProducts();
-  }
-
-  function startEdit(product) {
-    setEditingId(product.id);
-    setEditForm({
-      sku: product.sku,
-      name: product.name,
-      price: product.price,
-      stock: product.stock,
-      unit: product.unit,
-    });
-  }
-
-  function cancelEdit() {
-    setEditingId(null);
-    setEditForm({ sku: '', name: '', price: '', stock: '', unit: '' });
-  }
-
-  function handleEditChange(e) {
-    const { name, value } = e.target;
-    setEditForm((prev) => ({ ...prev, [name]: value }));
-  }
-
-  async function handleSaveEdit(id) {
-    if (!editForm.sku || !editForm.name || !editForm.price || !editForm.stock || !editForm.unit) {
-      setError('กรุณากรอกข้อมูลให้ครบทุกช่อง');
-      return;
-    }
-
-    setError('');
-    const { error } = await supabase
+    const newStock = product.stock - parsedQuantity;
+    const { error: stockError } = await supabase
       .from('products')
-      .update({
-        sku: editForm.sku,
-        name: editForm.name,
-        price: parseFloat(editForm.price),
-        stock: parseInt(editForm.stock, 10),
-        unit: editForm.unit,
-      })
-      .eq('id', id);
+      .update({ stock: newStock })
+      .eq('id', product.id);
 
-    if (error) {
-      setError(error.message);
+    if (stockError) {
+      setError(stockError.message);
+      setSubmitting(false);
       return;
     }
 
-    cancelEdit();
+    setSuccess(`ขายสำเร็จ: ${product.name} จำนวน ${parsedQuantity} ${product.unit} รวม ${total.toFixed(2)} บาท`);
+    resetForm();
     fetchProducts();
+    setSubmitting(false);
   }
 
   return (
     <div>
-      <h1 className="page-title">รายการสินค้า</h1>
+      <h1>ขายสินค้า</h1>
 
-      {error && <div className="alert alert-error">{error}</div>}
+      {error && (
+        <div className="card" style={{ color: '#dc2626', backgroundColor: '#fef2f2' }}>
+          {error}
+        </div>
+      )}
 
-      <div className="glass card">
-        <h2 className="section-title">
-          <Plus size={18} />
-          เพิ่มสินค้าใหม่
-        </h2>
-        <form onSubmit={handleAddProduct}>
-          <div className="form-row">
-            <input
-              type="text"
-              name="sku"
-              placeholder="SKU"
-              value={form.sku}
-              onChange={handleFormChange}
-            />
-            <input
-              type="text"
-              name="name"
-              placeholder="ชื่อสินค้า"
-              value={form.name}
-              onChange={handleFormChange}
-            />
-            <input
-              type="number"
-              name="price"
-              placeholder="ราคา"
-              value={form.price}
-              onChange={handleFormChange}
-              step="0.01"
-            />
-            <input
-              type="number"
-              name="stock"
-              placeholder="คงเหลือ"
-              value={form.stock}
-              onChange={handleFormChange}
-            />
-            <input
-              type="text"
-              name="unit"
-              placeholder="หน่วย"
-              value={form.unit}
-              onChange={handleFormChange}
-            />
-            <button type="submit" className="btn btn-accent">
-              <Plus size={16} />
-              เพิ่มสินค้า
-            </button>
-          </div>
-        </form>
-      </div>
+      {success && (
+        <div className="card" style={{ color: '#16a34a', backgroundColor: '#f0fdf4' }}>
+          {success}
+        </div>
+      )}
 
-      <div className="glass card">
+      <div className="card">
         {loading ? (
-          <p className="empty-state">กำลังโหลดข้อมูล...</p>
+          <p>กำลังโหลดข้อมูลสินค้า...</p>
         ) : products.length === 0 ? (
-          <div className="empty-state">
-            <PackageSearch size={32} />
-            <p>ยังไม่มีสินค้าในระบบ</p>
-          </div>
+          <p>ยังไม่มีสินค้าในระบบ กรุณาเพิ่มสินค้าก่อน</p>
         ) : (
-          <div className="table-wrap">
-            <table>
-              <thead>
-                <tr>
-                  <th>SKU</th>
-                  <th>ชื่อสินค้า</th>
-                  <th>ราคา</th>
-                  <th>คงเหลือ</th>
-                  <th>หน่วย</th>
-                  <th>การจัดการ</th>
-                </tr>
-              </thead>
-              <tbody>
+          <form onSubmit={handleSell}>
+            <div className="form-row">
+              <select
+                value={selectedProductId}
+                onChange={(e) => setSelectedProductId(e.target.value)}
+              >
+                <option value="">-- เลือกสินค้า --</option>
                 {products.map((product) => (
-                  <tr key={product.id}>
-                    {editingId === product.id ? (
-                      <>
-                        <td>
-                          <input
-                            type="text"
-                            name="sku"
-                            value={editForm.sku}
-                            onChange={handleEditChange}
-                          />
-                        </td>
-                        <td>
-                          <input
-                            type="text"
-                            name="name"
-                            value={editForm.name}
-                            onChange={handleEditChange}
-                          />
-                        </td>
-                        <td>
-                          <input
-                            type="number"
-                            name="price"
-                            value={editForm.price}
-                            onChange={handleEditChange}
-                            step="0.01"
-                          />
-                        </td>
-                        <td>
-                          <input
-                            type="number"
-                            name="stock"
-                            value={editForm.stock}
-                            onChange={handleEditChange}
-                          />
-                        </td>
-                        <td>
-                          <input
-                            type="text"
-                            name="unit"
-                            value={editForm.unit}
-                            onChange={handleEditChange}
-                          />
-                        </td>
-                        <td>
-                          <div className="row-actions">
-                            <button
-                              type="button"
-                              className="icon-btn"
-                              onClick={() => handleSaveEdit(product.id)}
-                              aria-label="บันทึก"
-                            >
-                              <Check size={16} />
-                            </button>
-                            <button
-                              type="button"
-                              className="icon-btn"
-                              onClick={cancelEdit}
-                              aria-label="ยกเลิก"
-                            >
-                              <X size={16} />
-                            </button>
-                          </div>
-                        </td>
-                      </>
-                    ) : (
-                      <>
-                        <td>{product.sku}</td>
-                        <td>{product.name}</td>
-                        <td>{Number(product.price).toFixed(2)}</td>
-                        <td>{product.stock}</td>
-                        <td>{product.unit}</td>
-                        <td>
-                          <div className="row-actions">
-                            <button
-                              type="button"
-                              className="icon-btn"
-                              onClick={() => startEdit(product)}
-                              aria-label="แก้ไข"
-                            >
-                              <Pencil size={16} />
-                            </button>
-                            <button
-                              type="button"
-                              className="icon-btn icon-btn-danger"
-                              onClick={() => handleDeleteProduct(product.id)}
-                              aria-label="ลบ"
-                            >
-                              <Trash2 size={16} />
-                            </button>
-                          </div>
-                        </td>
-                      </>
-                    )}
-                  </tr>
+                  <option key={product.id} value={product.id}>
+                    {product.name} ({Number(product.price).toFixed(2)} บาท) — คงเหลือ {product.stock} {product.unit}
+                  </option>
                 ))}
-              </tbody>
-            </table>
-          </div>
+              </select>
+
+              <input
+                type="number"
+                placeholder="จำนวน"
+                min="1"
+                value={quantity}
+                onChange={(e) => setQuantity(e.target.value)}
+              />
+            </div>
+
+            <div className="form-row">
+              <div>
+                <strong>ยอดรวม: {totalPrice.toFixed(2)} บาท</strong>
+              </div>
+            </div>
+
+            <button type="submit" disabled={submitting}>
+              {submitting ? 'กำลังบันทึก...' : 'ขาย'}
+            </button>
+          </form>
         )}
       </div>
     </div>
